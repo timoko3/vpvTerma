@@ -40,6 +40,13 @@ state_in_air = False  # Флаг для отслеживания фазы пол
 fig = plt.figure(figsize=(14, 8))
 fig.canvas.manager.set_window_title('Полная симуляция двигателя Дарлинга')
 
+fig.text(0.02, 0.90, 
+         "СИСТЕМА: Термодинамический двигатель Дарлинга\n"
+         "Среда: Вода (P_атм = 101.3 кПа, Ускорение g = 9.81 м/с²)\n"
+         "Рабочее тело: Жидкий анилин (Теплоемкость C_p = 2000 Дж/кг·К)\n"
+         "Механизм: Периодическое изменение плавучести из-за теплового расширения", 
+         fontsize=10, bbox=dict(facecolor='#f8f9fa', alpha=0.9, edgecolor='gray'))
+
 # 1. Левый график (Стакан)
 ax_beaker = fig.add_axes([0.05, 0.35, 0.1, 0.55])
 ax_beaker.set_title('Стакан')
@@ -53,7 +60,7 @@ grad_img = ax_beaker.imshow(gradient, extent=[0, 2, 0, H], aspect='auto', cmap='
 drop_plot = ax_beaker.scatter([1], [y], s=400, edgecolor='black', zorder=5)
 norm = Normalize(vmin=T_cold, vmax=100.0)
 cmap = plt.get_cmap('coolwarm')
-temp_text = ax_beaker.text(0.1, H - 0.5, '', fontsize=9, bbox=dict(facecolor='white', alpha=0.8))
+temp_text = ax_beaker.text(0.1, H * 0.7, '', fontsize=9, bbox=dict(facecolor='white', alpha=0.8))
 
 # 2. Центральный график (Высота от времени)
 ax_yt = fig.add_axes([0.22, 0.35, 0.35, 0.55])
@@ -79,8 +86,8 @@ ax_rad = fig.add_axes([0.15, 0.15, 0.3, 0.03])
 ax_hconv = fig.add_axes([0.60, 0.20, 0.3, 0.03])
 
 slider_thot = Slider(ax_thot, 'T_дна (°C)', 50.0, 100.0, valinit=T_hot_val)
-slider_rad = Slider(ax_rad, 'Радиус (мм)', 2.0, 10.0, valinit=R_mm_val)
-slider_hconv = Slider(ax_hconv, 'Теплоотдача (h)', 500.0, 4000.0, valinit=h_conv_val)
+slider_rad = Slider(ax_rad, 'Радиус R (мм)', 2.0, 10.0, valinit=R_mm_val)
+slider_hconv = Slider(ax_hconv, 'Теплоотдача h (Вт/м²·К)', 500.0, 4000.0, valinit=h_conv_val)
 
 def update_params(val):
     global T_hot_val, R_mm_val, h_conv_val
@@ -99,7 +106,7 @@ slider_hconv.on_changed(update_params)
 def update_physics():
     global y, v, T_drop, time_val
     global W_accum, Qin_accum, last_W, last_Qin, last_eff, state_in_air
-    global current_P, current_V # <-- ДОБАВЛЕНО
+    global current_P, current_V, mass
 
     # 1. Температура среды
     T_water = T_hot_val - (T_hot_val - T_cold) * (y / H)
@@ -188,6 +195,14 @@ def update_physics():
     P_hist.append(current_P)
     V_hist.append(current_V)
 
+    # Ограничение длины истории (стираем старые хвосты)
+    if len(t_hist) > max_history:
+        t_hist.pop(0)
+        y_hist.pop(0)
+        T_hist.pop(0)
+        P_hist.pop(0)
+        V_hist.pop(0)
+
 # --- Анимация ---
 def animate(frame):
     for _ in range(4):
@@ -195,7 +210,17 @@ def animate(frame):
         
     drop_plot.set_offsets(np.c_[1, y])
     drop_plot.set_facecolor(cmap(norm(T_drop)))
-    temp_text.set_text(f'T среды: {T_hot_val - (T_hot_val - T_cold)*(y/H):.1f}°C\nT капли: {T_drop:.1f}°C')
+
+    drop_plot.set_sizes([(R_mm_val / 5.0)**2 * 400])
+
+    # Выводим исчерпывающее состояние системы
+    temp_text.set_text(
+        f'--- Текущее состояние ---\n'
+        f'Масса: {mass*1000:.2f} г\n'
+        f'Объем: {current_V:.2f} мл\n'
+        f'T капли: {T_drop:.1f} °C\n'
+        f'T воды (вокруг): {T_hot_val - (T_hot_val - T_cold)*(y/H):.1f} °C'
+    )
     
     line_yt.set_data(t_hist, y_hist)
     if time_val > 20:
