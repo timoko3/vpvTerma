@@ -5,7 +5,7 @@ from matplotlib.colors import Normalize
 from matplotlib.widgets import Slider
 
 # --- Физические параметры ---
-H = 10.0           # Высота стакана
+H = 0.2            # Высота стакана
 T_cold = 20.0      # Температура на поверхности
 T_neutral = 50.0   # Нейтральная плавучесть
 dt = 0.05          # Шаг времени
@@ -104,17 +104,43 @@ def update_physics():
 
     # 1. Температура среды
     T_water = T_hot_val - (T_hot_val - T_cold) * (y / H)
+
+    # Эмпирические формулы плотности (кг/м^3)
+    rho_water = 998.0 - 0.4 * (T_water - 20.0)
+    rho_aniline = 1022.0 - 1.2 * (T_drop - 20.0)
+
+    # Геометрия капли (пусть радиус будет 5 мм = 0.005 м)
+    R = 0.005
+    V_drop_m3 = (4.0 / 3.0) * 3.14159 * R**3
+    S_cross = 3.14159 * R**2      # Площадь поперечного сечения (для трения)
+    S_surf = 4.0 * 3.14159 * R**2 # Площадь поверхности (для теплообмена)
+    mass = rho_aniline * V_drop_m3
     
-# 2. Теплообмен (Нагрев/Охлаждение)
-    dQ_dt = k_heat_val * (T_water - T_drop)
-    dT_drop = dQ_dt * dt
+# 2. Теплообмен (Закон Ньютона-Рихмана)
+    C_p = 2000.0    # Удельная теплоемкость анилина, Дж/(кг*°C)
+    h_conv = 1500.0 # Реальный коэффициент теплоотдачи в воде, Вт/(м2*°C)
+    
+    # Тепловой поток в Ваттах (Джоулях в секунду) через поверхность
+    dQ_dt = h_conv * S_surf * (T_water - T_drop)
+    
+    # На сколько градусов нагреет этот поток нашу массу за время dt
+    dT_drop = (dQ_dt / (mass * C_p)) * dt
     T_drop += dT_drop
     
     if dQ_dt > 0:
-        Qin_accum += dT_drop  # Считаем подведенное тепло (пропорционально dT)
+        Qin_accum += dQ_dt * dt  # Теперь это честные Джоули подведенного тепла!
         
-    # 3. Динамика 
-    a = c_buoy_val * (T_drop - T_neutral) - gamma_val * v
+    # 3. Динамика (через 2-й закон Ньютона)
+    # Сила = Архимед (вверх) - Тяжесть (вниз)
+    F_buoyancy = V_drop_m3 * 9.81 * rho_water
+    F_gravity = mass * 9.81
+    
+    C_d = 0.47
+    F_drag = -np.sign(v) * 0.5 * C_d * rho_water * S_cross * (v**2)
+    
+    F_net = F_buoyancy - F_gravity + F_drag
+    a = F_net / mass
+    
     v += a * dt  
     dy = v * dt
     y += dy      
