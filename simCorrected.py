@@ -15,12 +15,17 @@ T_hot_val = 80.0
 k_heat_val = 0.5
 gamma_val = 1.0
 c_buoy_val = 0.8
+C_heat = 1.0       # Эффективная теплоемкость (для честного расчета теплоты в Джоулях)
 
 # --- Начальные условия ---
 y = 0.0
 v = 0.0
 T_drop = 20.0
 time_val = 0.0
+
+# Начальные термодинамические координаты
+current_P = 100.0 + (H - y) * 0.5   # Оценочное давление в кПа (100 кПа на поверхности)
+current_V = 1.0 + T_drop * 0.002    # Оценочный объем в Литрах (тепловое расширение)
 
 # История (ограниченный буфер для графиков)
 max_history = 400
@@ -47,6 +52,7 @@ ax_beaker.set_ylim(0, H)
 ax_beaker.set_xticks([])
 ax_beaker.set_ylabel('Высота, см')
 
+# ИСПРАВЛЕНИЕ: origin='lower' чтобы горячий (красный) был на дне (y=0)
 gradient = np.linspace(T_hot_val, T_cold, 100).reshape(100, 1)
 grad_img = ax_beaker.imshow(gradient, extent=[0, 2, 0, H], aspect='auto', cmap='coolwarm', alpha=0.4, origin='lower')
 drop_plot = ax_beaker.scatter([1], [y], s=400, edgecolor='black', zorder=5)
@@ -62,12 +68,17 @@ ax_yt.set_xlabel('Время, с')
 ax_yt.grid(True)
 line_yt, = ax_yt.plot([], [], lw=2, color='darkblue')
 
-# 3. Правый график (Термодинамический цикл T от y)
+# 3. Правый график (Термодинамический цикл P-V)
 ax_cycle = fig.add_axes([0.65, 0.35, 0.3, 0.55])
 ax_cycle.set_title('Рабочий цикл: P-V диаграмма')
-ax_cycle.set_xlabel('Объем капли (V), отн. ед.')
+ax_cycle.set_xlabel('Объем капли (V), Листры')
 ax_cycle.set_ylabel('Давление (P), кПа')
 ax_cycle.grid(True)
+
+# ИСПРАВЛЕНИЕ: Жестко фиксируем оси графика P-V, чтобы он не прыгал
+ax_cycle.set_xlim(1.0, 1.3)
+ax_cycle.set_ylim(98.0, 107.0)
+
 line_cycle, = ax_cycle.plot([], [], lw=2, color='orange')
 cycle_text = ax_cycle.text(0.05, 0.95, '', transform=ax_cycle.transAxes, fontsize=10,
                            va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
@@ -101,28 +112,24 @@ slider_cbuoy.on_changed(update_params)
 def update_physics():
     global y, v, T_drop, time_val
     global W_accum, Qin_accum, last_W, last_Qin, last_eff, state_in_air
+    global current_P, current_V
 
     # 1. Температура среды
     T_water = T_hot_val - (T_hot_val - T_cold) * (y / H)
     
-# 2. Теплообмен (Нагрев/Охлаждение)
+    # 2. Теплообмен (Нагрев/Охлаждение)
     dQ_dt = k_heat_val * (T_water - T_drop)
-    dT_drop = dQ_dt * dt
-    T_drop += dT_drop
+    T_drop += dQ_dt * dt
     
+    # ИСПРАВЛЕНИЕ: Считаем теплоту с учетом теплоемкости (в Джоулях)
     if dQ_dt > 0:
-        Qin_accum += dT_drop  # Считаем подведенное тепло (пропорционально dT)
+        Qin_accum += C_heat * dQ_dt * dt
         
-    # 3. Динамика 
+    # 3. Динамика
     a = c_buoy_val * (T_drop - T_neutral) - gamma_val * v
-    v += a * dt  
+    v += a * dt  # Сначала обновляем скорость
     dy = v * dt
-    y += dy      
-    
-    # Считаем работу как площадь P-V петли (A = P * dV)
-    current_P = 100.0 + (H - y) * 0.5  # Давление в кПа
-    dV = 0.002 * dT_drop               # Изменение объема (из формулы V = 1.0 + T_drop * 0.002)
-    W_accum += current_P * dV          # Работа в Джоулях (кПа * Л)
+    y += dy      # Затем обновляем координату
 
     # 4. Граничные условия
     if y > 0.1:  # Слегка оторвались от дна
@@ -136,7 +143,8 @@ def update_physics():
         if state_in_air:
             last_W = W_accum
             last_Qin = Qin_accum
-            last_eff = (abs(last_W) / abs(last_Qin)) * 100 if last_Qin != 0 else 0
+            # ИСПРАВЛЕНИЕ: Модуль на случай обратных флуктуаций
+            last_eff = (abs(last_W) / abs(last_Qin)) * 100 if last_Qin > 0 else 0
             W_accum = 0.0
             Qin_accum = 0.0
             state_in_air = False
@@ -148,15 +156,24 @@ def update_physics():
         
     time_val += dt
     
-# Давление растет с глубиной (H - y), Объем растет с температурой T_drop
-    current_P = 100.0 + (H - y) * 0.5  # Оценочное давление в кПа
-    current_V = 1.0 + T_drop * 0.002   # Оценочный объем (тепловое расширение)
+    # 5. Термодинамика P-V и расчет Работы
+    prev_P = current_P
+    prev_V = current_V
     
+    current_P = 100.0 + (H - y) * 0.5  # Давление растет с глубиной (кПа)
+    current_V = 1.0 + T_drop * 0.002   # Объем растет с температурой (Литры)
+    
+    # ИСПРАВЛЕНИЕ: Интегрирование честной работы dW = P * dV
+    dV = current_V - prev_V
+    dW = ((current_P + prev_P) / 2.0) * dV # Площадь трапеции для точности (кПа * Л = Дж)
+    W_accum += dW
+    
+    # Запись в историю
     t_hist.append(time_val)
     y_hist.append(y)
     T_hist.append(T_drop)
-    P_hist.append(current_P)  # Запись давления
-    V_hist.append(current_V)  # Запись объема
+    P_hist.append(current_P)
+    V_hist.append(current_V)
     
     if len(t_hist) > max_history:
         t_hist.pop(0)
@@ -180,19 +197,13 @@ def animate(frame):
     else:
         ax_yt.set_xlim(0, 20)
         
-    # Обновление P-V диаграммы
     line_cycle.set_data(V_hist, P_hist)
-    
-    # Динамическое масштабирование осей P-V (чтобы цикл всегда был в центре)
-    if len(V_hist) > 0:
-        ax_cycle.set_xlim(min(V_hist) - 0.01, max(V_hist) + 0.01)
-        ax_cycle.set_ylim(min(P_hist) - 1, max(P_hist) + 1)
     
     cycle_text.set_text(
         f'Последний цикл:\n'
-        f'Подведено тепла (Q): {last_Qin:.2f} у.е.\n'
-        f'Работа (A): {last_W:.2f} у.е.\n'
-        f'КПД: {last_eff:.1f}%'
+        f'Подведено тепла (Q): {last_Qin:.2f} Дж\n'
+        f'Работа (A): {last_W:.2f} Дж\n'
+        f'КПД: {last_eff:.2f}%'
     )
     
     return drop_plot, temp_text, line_yt, line_cycle, cycle_text
